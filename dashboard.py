@@ -1,51 +1,74 @@
 import streamlit as st
 import pandas as pd
+from databricks import sql
+import plotly.express as px
+import streamlit as st
 import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
 import plotly.express as px
 
-# --- 1. Data Preparation and Loading ---
-st.set_page_config(layout="wide")
-st.title("Retail Store & Customer Insights")
-st.markdown("This dashboard visualizes key aspects of a sample retail store dataset.")
+# --- 1. SETUP & CONFIGURATION ---
 
-# Function to load data from a user-uploaded CSV file
-@st.cache_data
-def load_data(uploaded_file):
+# IMPORTANT: Ensure your Streamlit secrets file (.streamlit/secrets.toml)
+# has the Databricks credentials configured.
+DATABRICKS_TABLE_NAME = "retail_catalog.retail_schema.rfm_table"
+
+try:
+    DATABRICKS_HOST = st.secrets["databricks"]["host"]
+    DATABRICKS_HTTP_PATH = st.secrets["databricks"]["http_path"]
+    DATABRICKS_TOKEN = st.secrets["databricks"]["token"]
+except KeyError:
+    st.error("Databricks secrets not configured! Please set 'host', 'http_path', and 'token' in .streamlit/secrets.toml")
+    st.stop()
+
+
+# --- 2. DATABASE CONNECTION & DATA FETCHING ---
+
+@st.cache_data(ttl=600)  # Cache the data for 10 minutes (600 seconds)
+def load_data_from_databricks():
+    """Connects to Databricks and fetches all data from the target table."""
+    conn = None
     try:
-        df = pd.read_csv(uploaded_file)
-        # Assuming the CSV has a 'total_revenue' column, or we can create one
-        if 'total_revenue' not in df.columns:
-            if 'quantity' in df.columns and 'price' in df.columns:
-                df['total_revenue'] = df['quantity'] * df['price']
-            else:
-                st.error("Uploaded file must contain 'total_revenue' or both 'quantity' and 'price' columns.")
-                return None
-        return df
-    except Exception as e:
-        st.error(f"Error: Unable to read the uploaded CSV file. {e}")
-        return None
+        # Establish connection using the Databricks SQL Connector
+        conn = sql.connect(
+            server_hostname=DATABRICKS_HOST,
+            http_path=DATABRICKS_HTTP_PATH,
+            access_token=DATABRICKS_TOKEN
+        )
+        cursor = conn.cursor()
 
-uploaded_file = st.file_uploader("Choose a CSV file", type="csv")
-if uploaded_file is not None:
-    df = load_data(uploaded_file)
-    if df is not None:
-        # Pre-processing for visualizations
-        # Ensure 'invoice_date' column exists and is in datetime format
-        if 'invoice_date' in df.columns:
-            df['invoice_date'] = pd.to_datetime(df['invoice_date'])
-            df['invoice_month'] = df['invoice_date'].dt.strftime('%Y-%m')
-            df['day_of_week'] = df['invoice_date'].dt.day_name()
-            df['month_name'] = df['invoice_date'].dt.strftime('%B')
-        else:
-            st.warning("The 'invoice_date' column was not found. Seasonal trendlines and day of week plots will not be displayed.")
-            df['invoice_month'] = None
-            df['day_of_week'] = None
-            df['month_name'] = None
+        # SQL Query to fetch all data, similar to the verification query
+        query = f"""
+        SELECT *
+        FROM {DATABRICKS_TABLE_NAME}
+        """
         
-        st.write("Data successfully loaded!")
-        st.dataframe(df.head())
+        # Execute the query and fetch all data
+        cursor.execute(query)
+        data = cursor.fetchall()
+        columns = [desc[0] for desc in cursor.description]
+        
+        # Convert to Pandas DataFrame for dashboard use
+        df = pd.DataFrame(data, columns=columns)
+
+        # Data Cleaning/Preparation
+        df['invoice_date'] = pd.to_datetime(df['invoice_date'])
+        # Create an 'invoice_month' column for aggregation, addressing your earlier NameError
+        df['invoice_month'] = df['invoice_date'].dt.strftime('%Y-%m')
+        
+        st.success(f"Successfully loaded {len(df)} records from Databricks.")
+        return df
+
+    except Exception as e:
+        st.error(f"Error connecting to or querying Databricks: {e}")
+        return pd.DataFrame() # Return empty DataFrame on failure
+    finally:
+        if conn:
+            conn.close()
+
+# Load the data
+df = load_data_from_databricks()
 
 # Pre-processing for visualizations
 df['invoice_month'] = df['invoice_date'].dt.strftime('%Y-%m')
@@ -171,3 +194,4 @@ st.info("The visualizations are based on the data in your uploaded CSV file.")
 
 #st.info("The visualizations are based on a randomly generated dataset for demonstration purposes.")
 #streamlit run dashboard.py
+
