@@ -4,4 +4,6 @@ numpy
 matplotlib
 seaborn
 plotly
-databricks
+databricks-connect==13.3.8
+databricks-sdk==0.67.0
+databricks-sql-connector==4.1.3
